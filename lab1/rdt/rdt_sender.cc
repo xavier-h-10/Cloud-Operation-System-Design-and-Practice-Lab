@@ -67,6 +67,13 @@ void send_packet(struct packet *pkt) {
     if (window.size() < WINDOW_SIZE) {
         window.push_back(pkt);
         Sender_ToLowerLayer(pkt);
+
+        int tmp = 0;
+        memcpy(&tmp, pkt->data + 3, sizeof(int));
+        std::cout << "packet sent, add to window, seq=" << tmp << " size=" << window.size() << " " << pkt << std::endl;
+//        memcpy(&tmp, window[window.size() - 1]->data + 3, sizeof(int));
+
+//        std::cout << tmp << std::endl;
     } else {
 //        bool is_send = true;
 //        for (int i = 0; i < WINDOW_SIZE; i++) {
@@ -98,21 +105,22 @@ void Sender_FromUpperLayer(struct message *msg) {
     /* split the message if it is too big */
 
     /* reuse the same packet data structure */
-    packet pkt;
 
     /* the cursor always points to the first unsent byte in the message */
     int cursor = 0;
 
     while (msg->size - cursor > maxpayload_size) {
         /* fill in the packet */
-        pkt.data[2] = maxpayload_size;  //payload size
-        memcpy(pkt.data + 3, &(mx_seq), sizeof(int));
-        memcpy(pkt.data + header_size, msg->data + cursor, maxpayload_size);
-        unsigned short checksum = calc_checksum(&pkt);
-        memcpy(pkt.data, &checksum, sizeof(short));
+//        pkt->data[2] = maxpayload_size;  //payload size
+        packet *pkt = new packet;
+        memcpy(pkt->data + 2, &maxpayload_size, 1);
+        memcpy(pkt->data + 3, &(mx_seq), sizeof(int));
+        memcpy(pkt->data + header_size, msg->data + cursor, maxpayload_size);
+        unsigned short checksum = calc_checksum(pkt);
+        memcpy(pkt->data, &checksum, sizeof(short));
 
         std::cout << "send packet, seq=" << mx_seq << std::endl;
-        send_packet(&pkt);
+        send_packet(pkt);
         mx_seq++;
 
         /* move the cursor */
@@ -122,14 +130,16 @@ void Sender_FromUpperLayer(struct message *msg) {
     /* send out the last packet */
     if (msg->size > cursor) {
         /* fill in the packet */
-        pkt.data[2] = msg->size - cursor;
-        memcpy(pkt.data + 3, &(mx_seq), sizeof(int));
-        memcpy(pkt.data + header_size, msg->data + cursor, msg->size - cursor);
-        unsigned short checksum = calc_checksum(&pkt);
-        memcpy(pkt.data, &checksum, sizeof(short));
+        packet *pkt = new packet;
+        int tmp = msg->size - cursor;
+        memcpy(pkt->data + 2, &tmp, 1);
+        memcpy(pkt->data + 3, &(mx_seq), sizeof(int));
+        memcpy(pkt->data + header_size, msg->data + cursor, tmp);
+        unsigned short checksum = calc_checksum(pkt);
+        memcpy(pkt->data, &checksum, sizeof(short));
 
-        std::cout << "send packet, seq=" << mx_seq << std::endl;
-        send_packet(&pkt);
+        std::cout << "send last packet, seq=" << mx_seq << std::endl;
+        send_packet(pkt);
         mx_seq++;
     }
 }
@@ -148,13 +158,19 @@ void Sender_FromLowerLayer(struct packet *pkt) {
 
     std::cout << "receive ack, ack=" << ack << std::endl;
     if (ack > mx_ack) {
-        ack = mx_ack;
+        mx_ack = ack;
         if (window.size() == WINDOW_SIZE) {
             int seq;
-            memcpy(&seq, window[WINDOW_SIZE - 1] + 3, sizeof(int));
+
+            packet *tmp = window[window.size() - 1];
+            memcpy(&seq, tmp->data + 3, sizeof(int));
+//            std::cout << "see seq=" << seq << std::endl;
             std::cout << "window is full, seq=" << seq << " ack=" << ack << std::endl;
             if (seq <= ack) {
 //                std::cout<<" clear window, send packet"<<std::endl;
+                for (int i = 0; i < WINDOW_SIZE; i++) {
+                    delete window[i];
+                }
                 window.clear();
                 int size = std::min((int) buffer.size(), WINDOW_SIZE);
                 for (int i = 0; i < size; i++) {
@@ -169,12 +185,17 @@ void Sender_FromLowerLayer(struct packet *pkt) {
 /* event handler, called when the timer expires */
 void Sender_Timeout() {
     int n = window.size();
+    bool start_timer = false;
     for (int i = 0; i < n; i++) {
         int seq;
-        memcpy(&seq, window[i] + 3, sizeof(int));
+        memcpy(&seq, window[i]->data + 3, sizeof(int));
         if (seq > mx_ack) {
+            std::cout << "packet sent seq=" << seq << " ack=" << mx_ack << std::endl;
             Sender_ToLowerLayer(window[i]);
+            start_timer = true;
         }
     }
-    Sender_StartTimer(TIMEOUT);
+    if (start_timer) {
+        Sender_StartTimer(TIMEOUT);
+    }
 }

@@ -13,6 +13,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <iostream>
 
 #include "rdt_struct.h"
 #include "rdt_sender.h"
@@ -333,11 +334,16 @@ void Receiver_ToUpperLayer(struct message *msg)
 {
     static char cnt = 0;
 
+    bool p=true;
     for (int i=0; i<msg->size; i++) {
 	/* message verification */
 	if (msg->data[i] != '0' + cnt) {
 	    message_verfication_passed = false;
+        printf("message is wrong, %c %c\n",msg->data[i],'0'+cnt);
+        p=false;
 	}
+    if(!p)
+        std::cout<<msg->data[0]<<msg->data[1]<<std::endl;
 	cnt = (cnt+1) % 10;
 
 	if (tracing_level>=2)
@@ -430,15 +436,21 @@ int main(int argc, char *argv[])
     Sender_Init();
     Receiver_Init();
 
+    printf("init completed\n");
+
     /* scheduling a recurring message arrival event */
     EventSenderFromUpperLayer *e = new EventSenderFromUpperLayer;
     e->sched_time = 0;
     sim_core.schedule(e);
 
+    printf("schedule completed\n");
+
     /* main simulation cycle */
     for (;;) {
 	Event *e = sim_core.next_event();
 	if (e==NULL) break;
+
+//    printf("event %d\n", e->event_type);
 
 	switch (e->event_type) {
 	case EVENT_SENDER_FROMUPPERLAYER:
@@ -523,6 +535,9 @@ int main(int argc, char *argv[])
 	    "\t%d packets passed between the sender and the receiver\n", 
 	    sim_core.time(), tot_chars_sent, tot_chars_delivered, tot_pkts_passed);
 
+
+    if(message_verfication_passed) std::cout<<" pass message verfic"<<std::endl;
+    std::cout<<tot_chars_delivered<<" "<<tot_chars_sent<<std::endl;
     if (message_verfication_passed && (tot_chars_sent==tot_chars_delivered))
 	fprintf(stdout, "## Congratulations! This session is error-free, loss-free, and in order.\n");
     else
