@@ -49,7 +49,7 @@ void Receiver_Init() {
 
     msg = (message *) malloc(sizeof(message));
     packet_buffer = (packet *) malloc(WINDOW_SIZE * sizeof(packet));
-    memset(valid,0,sizeof(valid));
+    memset(valid, 0, sizeof(valid));
     ack = 0;
     cursor = 0;
 }

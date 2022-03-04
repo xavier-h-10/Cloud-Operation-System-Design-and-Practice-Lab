@@ -78,28 +78,27 @@ void convert() {
             memcpy(pkt.data + 2, &mx_seq, 4);
             pkt.data[header_size - 1] = RDT_PKTSIZE - header_size;  //TODO: 用memcpy有问题
             memcpy(pkt.data + header_size, msg.data + cursor, RDT_PKTSIZE - header_size);
+
             short checksum = calc_checksum(&pkt);
             memcpy(pkt.data, &checksum, 2);
             memcpy(window[mx_seq % WINDOW_SIZE].data, &pkt, sizeof(packet));
-            cursor += RDT_PKTSIZE - header_size;
             mx_seq++;
             now_size++;
+            cursor += RDT_PKTSIZE - header_size;
         } else if (cursor < msg.size) {
             memcpy(pkt.data + 2, &mx_seq, 4);
             pkt.data[header_size - 1] = msg.size - cursor;
             memcpy(pkt.data + header_size, msg.data + cursor, msg.size - cursor);
+
             short checksum = calc_checksum(&pkt);
             memcpy(pkt.data, &checksum, 2);
             memcpy(window[mx_seq % WINDOW_SIZE].data, &pkt, sizeof(packet));
-            mx_seq++;
-            now_size++;
             current_num++;
             cursor = 0;
             num_message--;
-            if (current_num < next_num) {
-                int idx = current_num % BUFFER_SIZE;
-                msg = buffer[idx];
-            }
+            mx_seq++;
+            now_size++;
+            if (current_num < next_num) msg = buffer[current_num % BUFFER_SIZE];
         }
     }
 }
