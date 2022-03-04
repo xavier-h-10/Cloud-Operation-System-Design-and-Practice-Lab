@@ -42,7 +42,7 @@ static int current_message_seq;
 static int next_message_seq;
 
 // 当前message已被拆分的byte数量
-static int message_buffer_cursor;
+static int cursor;
 
 // 存储待发送的数据包，大小为WINDOW_SIZE
 static packet* packet_window;
@@ -61,16 +61,15 @@ static int expected_ack_seq;
 
 const int header_size=7;
 
-static short Internet_Checksum(struct packet *pkt) {
-    unsigned long checksum = 0; // 32位
-    // 前两个字节为checksum区域，需要跳过
+static short calc_checksum(struct packet *pkt) {
+    long sum = 0;
     for (int i = 2; i < RDT_PKTSIZE; i += 2) {
-        checksum += *(short *)(&(pkt->data[i]));
+        sum += *(unsigned short *) (&(pkt->data[i]));
     }
-    while (checksum >> 16) { // 若sum的高16位非零
-        checksum = (checksum >> 16) + (checksum & 0xffff);
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
     }
-    return ~checksum;
+    return ~sum;
 }
 
 void Chunk_Message() {
@@ -82,29 +81,29 @@ void Chunk_Message() {
     // 每次拆出一个数据包并存入packct_window，直到packet_window满了，或message_buffer中不再有待拆分的消息
     while (num_packet < WINDOW_SIZE && current_message_seq < next_message_seq) {
         // 若剩余待拆分的byte数量太多，不能装入一个packet的payload
-        if (msg.size - message_buffer_cursor > RDT_PKTSIZE - header_size) {
+        if (msg.size - cursor > RDT_PKTSIZE - header_size) {
             // 写包头和数据
             memcpy(pkt.data + sizeof(short), &next_packet_seq, sizeof(int));
             pkt.data[header_size - 1] = RDT_PKTSIZE - header_size;
-            memcpy(pkt.data + header_size, msg.data + message_buffer_cursor, RDT_PKTSIZE - header_size);
+            memcpy(pkt.data + header_size, msg.data + cursor, RDT_PKTSIZE - header_size);
             // 计算checksum
-            checksum = Internet_Checksum(&pkt);
+            checksum = calc_checksum(&pkt);
             memcpy(pkt.data, &checksum, sizeof(short));
             // 将pkt的内容存入packet_window，位置为next_packet_index
             int next_packet_index = next_packet_seq % WINDOW_SIZE;
             memcpy(packet_window[next_packet_index].data, &pkt, sizeof(packet));
-            message_buffer_cursor += RDT_PKTSIZE - header_size;
+            cursor += RDT_PKTSIZE - header_size;
             ++next_packet_seq;
             ++num_packet;
         }
             // 剩余待拆分的byte可以一次性装入一个packet
-        else if (message_buffer_cursor < msg.size) {
+        else if (cursor < msg.size) {
             // 写包头和数据
             memcpy(pkt.data + sizeof(short), &next_packet_seq, sizeof(int));
-            pkt.data[header_size - 1] = msg.size - message_buffer_cursor;
-            memcpy(pkt.data + header_size, msg.data + message_buffer_cursor, msg.size - message_buffer_cursor);
+            pkt.data[header_size - 1] = msg.size - cursor;
+            memcpy(pkt.data + header_size, msg.data + cursor, msg.size - cursor);
             // 计算checksum
-            checksum = Internet_Checksum(&pkt);
+            checksum = calc_checksum(&pkt);
             memcpy(pkt.data, &checksum, sizeof(short));
             // 将pkt的内容存入packet_window，位置为next_packet_index
             int next_packet_index = next_packet_seq % WINDOW_SIZE;
@@ -113,7 +112,7 @@ void Chunk_Message() {
             ++num_packet;
             // 当前消息拆分完毕，将其从message_buffer中移除
             ++current_message_seq;
-            message_buffer_cursor = 0;
+            cursor = 0;
             --num_message;
             // 判断message_buffer中是否还有未拆分的message
             assert(current_message_seq + num_message == next_message_seq);
@@ -149,7 +148,7 @@ void Sender_Init() {
     num_message = 0;
     current_message_seq = 0;
     next_message_seq = 0;
-    message_buffer_cursor = 0;
+    cursor = 0;
 
     // 初始化pakcet_window
     packet_window = (packet *)malloc(WINDOW_SIZE * sizeof(packet));
@@ -214,7 +213,7 @@ void Sender_FromLowerLayer(struct packet *pkt) {
     // 检查checksum，校验失败则直接抛弃
     short checksum;
     memcpy(&checksum, pkt->data, sizeof(short));
-    if (checksum != Internet_Checksum(pkt)) { // 校验失败
+    if (checksum != calc_checksum(pkt)) { // 校验失败
         return ;
     }
 

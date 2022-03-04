@@ -28,40 +28,39 @@
 #define WINDOW_SIZE 10
 
 // 当前正在接受的message
-static message* current_message;
+static message *current_message;
 
 // 当前message已经构建完的byte数量
 static int message_cursor;
 
 // 接收方的数据包缓存
-static packet* receiver_buffer;
+static packet *receiver_buffer;
 
 // 数据包缓存的有效位
-static char* buffer_validation;
+static char *buffer_validation;
 
 // 应该收到的packet seq
 static int expected_packet_seq;
 
-const int header_size=7;
+const int header_size = 7; //checksum + payload_size + seq
 
-static short Internet_Checksum(struct packet *pkt) {
-    unsigned long checksum = 0; // 32位
-    // 前两个字节为checksum区域，需要跳过
+static short calc_checksum(struct packet *pkt) {
+    long sum = 0;
     for (int i = 2; i < RDT_PKTSIZE; i += 2) {
-        checksum += *(short *)(&(pkt->data[i]));
+        sum += *(unsigned short *) (&(pkt->data[i]));
     }
-    while (checksum >> 16) { // 若sum的高16位非零
-        checksum = (checksum >> 16) + (checksum & 0xffff);
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
     }
-    return ~checksum;
+    return ~sum;
 }
 
-void Send_Ack(int ack) {
-    packet ack_packet; // 其余位不用置零，有checksum保证正确性
-    memcpy(ack_packet.data + sizeof(short), &ack, sizeof(int));
-    short checksum = Internet_Checksum(&ack_packet);
-    memcpy(ack_packet.data, &checksum, sizeof(short));
-    Receiver_ToLowerLayer(&ack_packet);
+void send_ack(int ack) {
+    packet pkt;          // ack包只包含checksum和ack即可
+    memcpy(pkt.data + 2, &ack, 4);
+    short checksum = calc_checksum(&pkt);
+    memcpy(pkt.data, &checksum, 2);
+    Receiver_ToLowerLayer(&pkt);
 }
 
 
@@ -70,13 +69,11 @@ void Receiver_Init() {
     fprintf(stdout, "At %.2fs: receiver initializing ...\n", GetSimulationTime());
 
     // 初始化current_message
-    current_message = (message *)malloc(sizeof(message));
-    memset(current_message, 0, sizeof(message));
+    current_message = (message *) malloc(sizeof(message));
 
     // 初始化receiver_buffer和buffer_validation
-    receiver_buffer = (packet *)malloc(WINDOW_SIZE * sizeof(packet));
-    buffer_validation = (char *)malloc(WINDOW_SIZE);
-    memset(buffer_validation, 0, WINDOW_SIZE);
+    receiver_buffer = (packet *) malloc(WINDOW_SIZE * sizeof(packet));
+    buffer_validation = (char *) malloc(WINDOW_SIZE);
 
     // 其他初始化
     expected_packet_seq = 0;
@@ -88,21 +85,17 @@ void Receiver_Init() {
    in certain cases, you might want to use this opportunity to release some
    memory you allocated in Receiver_init(). */
 void Receiver_Final() {
-    free(current_message);
-    free(receiver_buffer);
-    free(buffer_validation);
     fprintf(stdout, "At %.2fs: receiver finalizing ...\n", GetSimulationTime());
 }
 
 /* event handler, called when a packet is passed from the lower layer at the
    receiver */
-void Receiver_FromLowerLayer(struct packet *pkt)
-{
+void Receiver_FromLowerLayer(struct packet *pkt) {
     // 检查checksum，校验失败则直接抛弃
     short checksum;
     memcpy(&checksum, pkt->data, sizeof(short));
-    if (checksum != Internet_Checksum(pkt)) { // 校验失败
-        return ;
+    if (checksum != calc_checksum(pkt)) { // 校验失败
+        return;
     }
 
     int current_packet_seq;
@@ -115,16 +108,14 @@ void Receiver_FromLowerLayer(struct packet *pkt)
             memcpy(receiver_buffer[buffer_index].data, pkt->data, RDT_PKTSIZE);
             buffer_validation[buffer_index] = 1;
         }
-        Send_Ack(expected_packet_seq - 1);
-        return ;
-    }
-    else if (current_packet_seq != expected_packet_seq) {
-        Send_Ack(expected_packet_seq - 1);
-        return ;
-    }
-    else if (current_packet_seq == expected_packet_seq) { // 收到了想要的数据包
+        send_ack(expected_packet_seq - 1);
+        return;
+    } else if (current_packet_seq != expected_packet_seq) {
+        send_ack(expected_packet_seq - 1);
+        return;
+    } else if (current_packet_seq == expected_packet_seq) { // 收到了想要的数据包
         int payload_size;
-        while(1) {
+        while (1) {
             ++expected_packet_seq;
             // memcpy(&payload_size, pkt->data + sizeof(short) + sizeof(int), sizeof(char));
             // WAERNING: 如果用上面的方法给payload_size赋值会出错！
@@ -138,11 +129,10 @@ void Receiver_FromLowerLayer(struct packet *pkt)
                 }
                 payload_size -= sizeof(int); // 减去message_size占用的4个byte
                 memcpy(&(current_message->size), pkt->data + header_size, sizeof(int));
-                current_message->data = (char *)malloc(current_message->size);
+                current_message->data = (char *) malloc(current_message->size);
                 memcpy(current_message->data + message_cursor, pkt->data + header_size + sizeof(int), payload_size);
                 message_cursor += payload_size;
-            }
-            else {
+            } else {
                 memcpy(current_message->data + message_cursor, pkt->data + header_size, payload_size);
                 message_cursor += payload_size;
             }
@@ -159,10 +149,9 @@ void Receiver_FromLowerLayer(struct packet *pkt)
                 pkt = &receiver_buffer[buffer_index];
                 memcpy(&current_packet_seq, pkt->data + sizeof(short), sizeof(int));
                 buffer_validation[buffer_index] = 0;
-            }
-            else { // 缓存中没有可用数据包，则发回ack，结束
-                Send_Ack(current_packet_seq);
-                return ;
+            } else { // 缓存中没有可用数据包，则发回ack，结束
+                send_ack(current_packet_seq);
+                return;
             }
         }
     }
