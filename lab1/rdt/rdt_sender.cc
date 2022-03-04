@@ -83,12 +83,12 @@ void Chunk_Message() {
         // 若剩余待拆分的byte数量太多，不能装入一个packet的payload
         if (msg.size - cursor > RDT_PKTSIZE - header_size) {
             // 写包头和数据
-            memcpy(pkt.data + sizeof(short), &next_packet_seq, sizeof(int));
+            memcpy(pkt.data + 2, &next_packet_seq, 4);
             pkt.data[header_size - 1] = RDT_PKTSIZE - header_size;
             memcpy(pkt.data + header_size, msg.data + cursor, RDT_PKTSIZE - header_size);
             // 计算checksum
             checksum = calc_checksum(&pkt);
-            memcpy(pkt.data, &checksum, sizeof(short));
+            memcpy(pkt.data, &checksum, 2);
             // 将pkt的内容存入packet_window，位置为next_packet_index
             int next_packet_index = next_packet_seq % WINDOW_SIZE;
             memcpy(packet_window[next_packet_index].data, &pkt, sizeof(packet));
@@ -99,12 +99,12 @@ void Chunk_Message() {
             // 剩余待拆分的byte可以一次性装入一个packet
         else if (cursor < msg.size) {
             // 写包头和数据
-            memcpy(pkt.data + sizeof(short), &next_packet_seq, sizeof(int));
+            memcpy(pkt.data + 2, &next_packet_seq, 4);
             pkt.data[header_size - 1] = msg.size - cursor;
             memcpy(pkt.data + header_size, msg.data + cursor, msg.size - cursor);
             // 计算checksum
             checksum = calc_checksum(&pkt);
-            memcpy(pkt.data, &checksum, sizeof(short));
+            memcpy(pkt.data, &checksum, 2);
             // 将pkt的内容存入packet_window，位置为next_packet_index
             int next_packet_index = next_packet_seq % WINDOW_SIZE;
             memcpy(packet_window[next_packet_index].data, &pkt, sizeof(packet));
@@ -189,10 +189,10 @@ void Sender_FromUpperLayer(struct message *msg) {
         free(message_buffer[next_message_index].data);
     }
     // 因为msg拆分后的第一个数据包的payload中包含了msg.size的信息，所以比msg原本的size大了4个byte
-    message_buffer[next_message_index].size = msg->size + sizeof(int);
+    message_buffer[next_message_index].size = msg->size + 4;
     message_buffer[next_message_index].data = (char *)malloc(message_buffer[next_message_index].size);
-    memcpy(message_buffer[next_message_index].data, &(msg->size), sizeof(int)); // 先将msg->size保存到data中
-    memcpy(message_buffer[next_message_index].data + sizeof(int), msg->data, msg->size);
+    memcpy(message_buffer[next_message_index].data, &(msg->size), 4); // 先将msg->size保存到data中
+    memcpy(message_buffer[next_message_index].data + 4, msg->data, msg->size);
     ++next_message_seq;
     ++num_message;
 
@@ -212,13 +212,13 @@ void Sender_FromUpperLayer(struct message *msg) {
 void Sender_FromLowerLayer(struct packet *pkt) {
     // 检查checksum，校验失败则直接抛弃
     short checksum;
-    memcpy(&checksum, pkt->data, sizeof(short));
+    memcpy(&checksum, pkt->data, 2);
     if (checksum != calc_checksum(pkt)) { // 校验失败
         return ;
     }
 
     int ack_seq;
-    memcpy(&ack_seq, pkt->data + sizeof(short), sizeof(int));
+    memcpy(&ack_seq, pkt->data + 2, 4);
     // 若收到的ack_seq在正常范围，则说明小于ack的packet都已经被receiver正常接收
     if (expected_ack_seq <= ack_seq && ack_seq < next_packet_seq) {
         num_packet -= (ack_seq - expected_ack_seq + 1); // 确认接收的包均从packet_window中可移除

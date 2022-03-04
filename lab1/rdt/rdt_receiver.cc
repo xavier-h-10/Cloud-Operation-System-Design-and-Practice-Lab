@@ -37,10 +37,10 @@ static int message_cursor;
 static packet *receiver_buffer;
 
 // 数据包缓存的有效位
-static char *buffer_validation;
+static char *valid;
 
 // 应该收到的packet seq
-static int expected_packet_seq;
+static int ack;
 
 const int header_size = 7; //checksum + payload_size + seq
 
@@ -71,12 +71,12 @@ void Receiver_Init() {
     // 初始化current_message
     current_message = (message *) malloc(sizeof(message));
 
-    // 初始化receiver_buffer和buffer_validation
+    // 初始化receiver_buffer和valid
     receiver_buffer = (packet *) malloc(WINDOW_SIZE * sizeof(packet));
-    buffer_validation = (char *) malloc(WINDOW_SIZE);
+    valid = (char *) malloc(WINDOW_SIZE);
 
     // 其他初始化
-    expected_packet_seq = 0;
+    ack = 0;
     message_cursor = 0;
 }
 
@@ -93,31 +93,30 @@ void Receiver_Final() {
 void Receiver_FromLowerLayer(struct packet *pkt) {
     // 检查checksum，校验失败则直接抛弃
     short checksum;
-    memcpy(&checksum, pkt->data, sizeof(short));
+    memcpy(&checksum, pkt->data, 2);
     if (checksum != calc_checksum(pkt)) { // 校验失败
         return;
     }
 
-    int current_packet_seq;
-    memcpy(&current_packet_seq, pkt->data + sizeof(short), sizeof(int));
-    if (expected_packet_seq < current_packet_seq &&
-        current_packet_seq < expected_packet_seq + WINDOW_SIZE) {
-        // 若条件允许，则存入接受者缓存
-        int buffer_index = current_packet_seq % WINDOW_SIZE;
-        if (buffer_validation[buffer_index] == 0) {
-            memcpy(receiver_buffer[buffer_index].data, pkt->data, RDT_PKTSIZE);
-            buffer_validation[buffer_index] = 1;
+    int seq;
+    memcpy(&seq, pkt->data + 2, 4);
+    if (ack < seq &&
+        seq < ack + WINDOW_SIZE) {
+        int idx = seq % WINDOW_SIZE;
+        if (valid[idx] == 0) {
+            memcpy(receiver_buffer[idx].data, pkt->data, RDT_PKTSIZE);
+            valid[idx] = 1;
         }
-        send_ack(expected_packet_seq - 1);
+        send_ack(ack - 1);
         return;
-    } else if (current_packet_seq != expected_packet_seq) {
-        send_ack(expected_packet_seq - 1);
+    } else if (seq != ack) {
+        send_ack(ack - 1);
         return;
-    } else if (current_packet_seq == expected_packet_seq) { // 收到了想要的数据包
+    } else if (seq == ack) { // 收到了想要的数据包
         int payload_size;
         while (1) {
-            ++expected_packet_seq;
-            // memcpy(&payload_size, pkt->data + sizeof(short) + sizeof(int), sizeof(char));
+            ++ack;
+            // memcpy(&payload_size, pkt->data + 2 + 4, sizeof(char));
             // WAERNING: 如果用上面的方法给payload_size赋值会出错！
             payload_size = pkt->data[header_size - 1];
 
@@ -127,10 +126,10 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
                     current_message->size = 0;
                     free(current_message->data);
                 }
-                payload_size -= sizeof(int); // 减去message_size占用的4个byte
-                memcpy(&(current_message->size), pkt->data + header_size, sizeof(int));
+                payload_size -= 4; // 减去message_size占用的4个byte
+                memcpy(&(current_message->size), pkt->data + header_size, 4);
                 current_message->data = (char *) malloc(current_message->size);
-                memcpy(current_message->data + message_cursor, pkt->data + header_size + sizeof(int), payload_size);
+                memcpy(current_message->data + message_cursor, pkt->data + header_size + 4, payload_size);
                 message_cursor += payload_size;
             } else {
                 memcpy(current_message->data + message_cursor, pkt->data + header_size, payload_size);
@@ -143,14 +142,13 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
                 message_cursor = 0;
             }
 
-            // 检查receiver_buffer中有无可用的、且刚好和expected_seq对应的数据包
-            int buffer_index = expected_packet_seq % WINDOW_SIZE;
-            if (buffer_validation[buffer_index] == 1) {
-                pkt = &receiver_buffer[buffer_index];
-                memcpy(&current_packet_seq, pkt->data + sizeof(short), sizeof(int));
-                buffer_validation[buffer_index] = 0;
-            } else { // 缓存中没有可用数据包，则发回ack，结束
-                send_ack(current_packet_seq);
+            int idx = ack % WINDOW_SIZE;
+            if (valid[idx] == 1) {
+                pkt = &receiver_buffer[idx];
+                memcpy(&seq, pkt->data + 2, 4);
+                valid[idx] = 0;
+            } else {
+                send_ack(seq);
                 return;
             }
         }
