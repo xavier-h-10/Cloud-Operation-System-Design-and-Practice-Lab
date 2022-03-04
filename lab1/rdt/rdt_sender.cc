@@ -96,21 +96,17 @@ static short calc_checksum(struct packet *pkt) {
 }
 
 void Chunk_Message() {
-    int current_message_index = current_num % MAX_BUFFER_SIZE;
-    message msg = message_buffer[current_message_index];
+    int idx = current_num % MAX_BUFFER_SIZE;
+    message msg = message_buffer[idx];
     packet pkt;
-    short checksum;
 
-    // 每次拆出一个数据包并存入packct_window，直到window满了，或message_buffer中不再有待拆分的消息
     while (now_size < WINDOW_SIZE && current_num < next_num) {
-        // 若剩余待拆分的byte数量太多，不能装入一个packet的payload
         if (msg.size - cursor > RDT_PKTSIZE - header_size) {
-            // 写包头和数据
             memcpy(pkt.data + 2, &mx_seq, 4);
-            pkt.data[header_size - 1] = RDT_PKTSIZE - header_size;
+            pkt.data[header_size - 1] = RDT_PKTSIZE - header_size;  //TODO: 用memcpy有问题
             memcpy(pkt.data + header_size, msg.data + cursor, RDT_PKTSIZE - header_size);
             // 计算checksum
-            checksum = calc_checksum(&pkt);
+            short checksum = calc_checksum(&pkt);
             memcpy(pkt.data, &checksum, 2);
             // 将pkt的内容存入window，位置为next_packet_index
             int next_packet_index = mx_seq % WINDOW_SIZE;
@@ -125,12 +121,9 @@ void Chunk_Message() {
             memcpy(pkt.data + 2, &mx_seq, 4);
             pkt.data[header_size - 1] = msg.size - cursor;
             memcpy(pkt.data + header_size, msg.data + cursor, msg.size - cursor);
-            // 计算checksum
-            checksum = calc_checksum(&pkt);
+            short checksum = calc_checksum(&pkt);
             memcpy(pkt.data, &checksum, 2);
-            // 将pkt的内容存入window，位置为next_packet_index
-            int next_packet_index = mx_seq % WINDOW_SIZE;
-            memcpy(window[next_packet_index].data, &pkt, sizeof(packet));
+            memcpy(window[mx_seq % WINDOW_SIZE].data, &pkt, sizeof(packet));
             ++mx_seq;
             ++now_size;
             // 当前消息拆分完毕，将其从message_buffer中移除
@@ -140,14 +133,9 @@ void Chunk_Message() {
             // 判断message_buffer中是否还有未拆分的message
             assert(current_num + num_message == next_num);
             if (current_num < next_num) {
-                int current_message_index = current_num % MAX_BUFFER_SIZE;
-                msg = message_buffer[current_message_index];
+                int idx = current_num % MAX_BUFFER_SIZE;
+                msg = message_buffer[idx];
             }
-        }
-        else {
-            // SHOULD NOT BE HERE
-            printf("ERROR: should not reach here in Chunk_Message() !");
-            assert(0);
         }
     }
 }
@@ -167,13 +155,7 @@ void send_packet() {
    sender */
 void Sender_FromUpperLayer(struct message *msg) {
 
-    // 将消息存入message_buffer，位置为idx
     int idx = next_num % MAX_BUFFER_SIZE;
-    if (message_buffer[idx].size > 0) {
-        message_buffer[idx].size = 0;
-        free(message_buffer[idx].data);
-    }
-    // 因为msg拆分后的第一个数据包的payload中包含了msg.size的信息，所以比msg原本的size大了4个byte
     message_buffer[idx].size = msg->size + 4;
     message_buffer[idx].data = (char *)malloc(message_buffer[idx].size);
     memcpy(message_buffer[idx].data, &(msg->size), 4); // 先将msg->size保存到data中
