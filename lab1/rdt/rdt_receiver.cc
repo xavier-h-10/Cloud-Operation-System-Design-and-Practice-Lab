@@ -74,13 +74,13 @@ unsigned short calc_Checksum(struct packet *pkt) {
 
 void send_ack(int ack) {
     std::cout << "send ack , ack=" << ack << std::endl;
-    packet pkt;         // ack包只包含checksum和ack即可
-    memcpy(pkt.data + 2, &ack, sizeof(int));
+    packet *pkt = new packet;         // ack包只包含checksum和ack即可
+    memcpy(pkt->data + 2, &ack, sizeof(int));
 
-    unsigned short checksum = calc_Checksum(&pkt);
-    memcpy(pkt.data, &checksum, sizeof(short));
-
-    Receiver_ToLowerLayer(&pkt);
+    unsigned short checksum = calc_Checksum(pkt);
+    memcpy(pkt->data, &checksum, sizeof(short));
+    std::cout<<" send ack check 1"<<std::endl;
+    Receiver_ToLowerLayer(pkt);
 }
 
 
@@ -97,7 +97,7 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
     memcpy(&checksum, pkt->data, sizeof(short));
     memcpy(&msg->size, pkt->data + 2, 1);
     if (checksum != calc_Checksum(pkt) || msg->size < 0 || msg->size > RDT_PKTSIZE - header_size) {
-        std::cout<<"packet corrupted"<<std::endl;
+        std::cout << "packet corrupted" << std::endl;
         return;
     }
 
@@ -107,8 +107,8 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
     std::cout << "receive packet, seq=" << seq << " ack=" << ack << " size=" << msg->size << std::endl;
     if (seq >= ack + WINDOW_SIZE) return; //超出当前滑动窗口，因此不接收
 
-    if(seq<ack) {           //此时说明ack发生了丢包，需要重传ack包
-        send_ack(ack-1);
+    if (seq < ack) {           //此时说明ack发生了丢包，需要重传ack包
+        send_ack(ack - 1);
     }
 
     msg->data = (char *) malloc(msg->size);
@@ -125,17 +125,18 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
         std::cout << "checkpoint 2.0.2" << std::endl;
         while (true) {
             ack++;
+            std::cout<<"checkpoint 2.1.0 "<<ack<<std::endl;
             message *tmp = message_buffer[ack % WINDOW_SIZE];
             seq = message_num[ack % WINDOW_SIZE];
             if (tmp == nullptr || tmp->size <= 0 || tmp->size > RDT_PKTSIZE || seq != ack) break;
-            std::cout << "checkpoint 2.1 " << seq << " " << ack << " " << tmp->size << std::endl;
-//            memcpy(&seq, tmp->data + 3, sizeof(int));
-            std::cout << "checkpoint 2.2 seq=" << seq << " ack=" << ack << std::endl;
-            if (seq == ack) {
-                Receiver_ToUpperLayer(tmp);
-            } else {
-                break;
-            }
+            std::cout << "checkpoint 2.1 " << seq << " " << ack << " " << tmp->size << " " << strlen(tmp->data)
+                      << std::endl;
+//            if (seq == ack) {
+//                Receiver_ToUpperLayer(tmp);
+//            } else {
+//                break;
+//            }
+            Receiver_ToUpperLayer(tmp);
         }
         send_ack(ack - 1);
     }

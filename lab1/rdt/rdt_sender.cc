@@ -29,8 +29,8 @@
 
 #define DEBUG 1
 
-int mx_seq, mx_ack;
-std::vector<packet *> window;
+int mx_seq, mx_ack, now_size;
+packet *window[WINDOW_SIZE];
 std::queue<packet *> buffer;
 
 /* sender initialization, called once at the very beginning */
@@ -38,7 +38,7 @@ void Sender_Init() {
     fprintf(stdout, "At %.2fs: sender initializing ...\n", GetSimulationTime());
     mx_seq = 0;
     mx_ack = -1;
-    window.clear();
+    now_size = 0;
     while (!buffer.empty()) buffer.pop();
 }
 
@@ -64,8 +64,9 @@ unsigned short calc_checksum(struct packet *pkt) {
 
 void send_packet(struct packet *pkt) {
     /* send it out through the lower layer */
-    if (window.size() < WINDOW_SIZE) {
-        window.push_back(pkt);
+    if (now_size < WINDOW_SIZE) {
+//        window.push_back(pkt);
+        window[now_size++] = pkt;
         Sender_ToLowerLayer(pkt);
 
         //   memcpy(&tmp, pkt->data + 3, sizeof(int));
@@ -76,7 +77,7 @@ void send_packet(struct packet *pkt) {
     } else {
         buffer.push(pkt);
     }
-    Sender_StartTimer(TIMEOUT);
+//    Sender_StartTimer(TIMEOUT);
 }
 
 /* event handler, called when a message is passed from the upper layer at the
@@ -101,9 +102,9 @@ void Sender_FromUpperLayer(struct message *msg) {
         unsigned short checksum = calc_checksum(pkt);
         memcpy(pkt->data, &checksum, sizeof(short));
 
-        char pp[128];
-        memcpy(pp, pkt->data + header_size, maxpayload_size);
-        std::cout << "send packet, seq=" << mx_seq << " " << pp << std::endl;
+//        char pp[128];
+//        memcpy(pp, pkt->data + header_size, maxpayload_size);
+//        std::cout << "send packet, seq=" << mx_seq << " " << pp << std::endl;
         send_packet(pkt);
         mx_seq++;
 
@@ -122,13 +123,14 @@ void Sender_FromUpperLayer(struct message *msg) {
         unsigned short checksum = calc_checksum(pkt);
         memcpy(pkt->data, &checksum, sizeof(short));
 
-        char pp[128];
-        memcpy(pp, pkt->data + header_size, tmp);
-
-        std::cout << "send last packet, seq=" << mx_seq << " " << pp << std::endl;
+//        char pp[128];
+//        memcpy(pp, pkt->data + header_size, tmp);
+//
+//        std::cout << "send last packet, seq=" << mx_seq << " " << pp << std::endl;
         send_packet(pkt);
         mx_seq++;
     }
+    Sender_StartTimer(TIMEOUT);
 }
 
 /* event handler, called when a packet is passed from the lower layer at the
@@ -146,38 +148,47 @@ void Sender_FromLowerLayer(struct packet *pkt) {
     std::cout << "receive ack, ack=" << ack << std::endl;
     if (ack > mx_ack) {
         mx_ack = ack;
-        if (window.size() == WINDOW_SIZE) {
+        if (now_size == WINDOW_SIZE) {
             int seq;
 
-            packet *tmp = window[window.size() - 1];
+            packet *tmp = window[now_size - 1];
             memcpy(&seq, tmp->data + 3, sizeof(int));
-//            std::cout << "see seq=" << seq << std::endl;
-            std::cout << "window is full, seq=" << seq << " ack=" << ack << std::endl;
+            std::cout << "see seq=" << seq << std::endl;
+            std::cout << "window is full, seq=" << seq << " ack=" << ack <<" buffer_size="<<buffer.size()<< std::endl;
             if (seq <= ack) {
-//                std::cout<<" clear window, send packet"<<std::endl;
-                for (int i = 0; i < WINDOW_SIZE; i++) {
-                    delete window[i];
-                }
-                window.clear();
+                std::cout << " clear window, send packet" << std::endl;
+//                for (int i = 0; i < WINDOW_SIZE; i++) {
+//                    delete window[i];
+//                }
+//                window.clear();
+                now_size = 0;
                 int size = std::min((int) buffer.size(), WINDOW_SIZE);
                 for (int i = 0; i < size; i++) {
-                    send_packet(buffer.front());
+                    std::cout << "i=" << i << std::endl;
+                    window[now_size++] = buffer.front();
+                    std::cout << "check 3.1" << std::endl;
+                    Sender_ToLowerLayer(window[i]);
+                    std::cout << "check 3.2" << std::endl;
                     buffer.pop();
+                    std::cout << "check 3.3" << std::endl;
                 }
+                Sender_StartTimer(TIMEOUT);
             }
         }
     }
+
+//    if(pkt) delete pkt;  // 收到ack包后,回收空间
 }
 
 /* event handler, called when the timer expires */
 void Sender_Timeout() {
-    int n = window.size();
     bool start_timer = false;
-    for (int i = 0; i < n; i++) {
+    std::cout << "timeout, window.size=" << now_size << " buffer.size=" << buffer.size() << std::endl;
+    for (int i = 0; i < now_size; i++) {
         int seq;
         memcpy(&seq, window[i]->data + 3, sizeof(int));
         if (seq > mx_ack) {
-            std::cout << "packet sent seq=" << seq << " ack=" << mx_ack << std::endl;
+//            std::cout << "packet resent seq=" << seq << " ack=" << mx_ack << std::endl;
             Sender_ToLowerLayer(window[i]);
             start_timer = true;
         }
@@ -186,13 +197,15 @@ void Sender_Timeout() {
         Sender_StartTimer(TIMEOUT);
     } else {
         if (buffer.empty()) return;
-        for (int i = 0; i < WINDOW_SIZE; i++) {
-            delete window[i];
-        }
-        window.clear();
+//        for (int i = 0; i < WINDOW_SIZE; i++) {
+//            delete window[i];
+//        }
+        now_size = 0;
         int size = std::min((int) buffer.size(), WINDOW_SIZE);
         for (int i = 0; i < size; i++) {
-            Sender_ToLowerLayer(buffer.front());
+//            window.push_back(buffer.front());
+            window[now_size++] = buffer.front();
+            Sender_ToLowerLayer(window[i]);
             buffer.pop();
         }
         Sender_StartTimer(TIMEOUT);
