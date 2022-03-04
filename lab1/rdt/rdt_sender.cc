@@ -32,10 +32,10 @@ static message* message_buffer;
 static int num_message;
 
 // 当前正在处理的消息序号
-static int current_message_seq;
+static int current_num;
 
 // 下一个进入message_buffer的消息的序号
-static int next_message_seq;
+static int next_num;
 
 // 当前message已被拆分的byte数量
 static int cursor;
@@ -55,19 +55,8 @@ static int next_seq;
 
 // 应该接收到的ack序号
 static int mx_ack;
-
 const int header_size=7;
 
-static short calc_checksum(struct packet *pkt) {
-    long sum = 0;
-    for (int i = 2; i < RDT_PKTSIZE; i += 2) {
-        sum += *(unsigned short *) (&(pkt->data[i]));
-    }
-    while (sum >> 16) {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    return ~sum;
-}
 
 /* sender initialization, called once at the very beginning */
 void Sender_Init() {
@@ -75,8 +64,8 @@ void Sender_Init() {
     message_buffer = (message *)malloc((MAX_BUFFER_SIZE) * sizeof(message));
     memset(message_buffer, 0, (MAX_BUFFER_SIZE) * sizeof(message));
     num_message = 0;
-    current_message_seq = 0;
-    next_message_seq = 0;
+    current_num = 0;
+    next_num = 0;
     cursor = 0;
 
     window = (packet *)malloc(WINDOW_SIZE * sizeof(packet));
@@ -93,23 +82,27 @@ void Sender_Init() {
    memory you allocated in Sender_init(). */
 void Sender_Final() {
     fprintf(stdout, "At %.2fs: sender finalizing ...\n", GetSimulationTime());
-    for (int i = 0; i < MAX_BUFFER_SIZE; ++i) {
-        if (message_buffer[i].size > 0) {
-            free(message_buffer[i].data);
-        }
+}
+
+static short calc_checksum(struct packet *pkt) {
+    long sum = 0;
+    for (int i = 2; i < RDT_PKTSIZE; i += 2) {
+        sum += *(unsigned short *) (&(pkt->data[i]));
     }
-    free(message_buffer);
-    free(window);
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    return ~sum;
 }
 
 void Chunk_Message() {
-    int current_message_index = current_message_seq % MAX_BUFFER_SIZE;
+    int current_message_index = current_num % MAX_BUFFER_SIZE;
     message msg = message_buffer[current_message_index];
     packet pkt;
     short checksum;
 
     // 每次拆出一个数据包并存入packct_window，直到window满了，或message_buffer中不再有待拆分的消息
-    while (now_size < WINDOW_SIZE && current_message_seq < next_message_seq) {
+    while (now_size < WINDOW_SIZE && current_num < next_num) {
         // 若剩余待拆分的byte数量太多，不能装入一个packet的payload
         if (msg.size - cursor > RDT_PKTSIZE - header_size) {
             // 写包头和数据
@@ -141,13 +134,13 @@ void Chunk_Message() {
             ++mx_seq;
             ++now_size;
             // 当前消息拆分完毕，将其从message_buffer中移除
-            ++current_message_seq;
+            ++current_num;
             cursor = 0;
             --num_message;
             // 判断message_buffer中是否还有未拆分的message
-            assert(current_message_seq + num_message == next_message_seq);
-            if (current_message_seq < next_message_seq) {
-                int current_message_index = current_message_seq % MAX_BUFFER_SIZE;
+            assert(current_num + num_message == next_num);
+            if (current_num < next_num) {
+                int current_message_index = current_num % MAX_BUFFER_SIZE;
                 msg = message_buffer[current_message_index];
             }
         }
@@ -159,36 +152,33 @@ void Chunk_Message() {
     }
 }
 
-void Send_Packet() {
+void send_packet() {
+    /* send it out through the lower layer */
     packet pkt;
-    // 每次发一个包，直到window中的包全部发完
     while (next_seq < mx_seq) {
         memcpy(&pkt, &(window[next_seq % WINDOW_SIZE]), sizeof(packet));
         Sender_ToLowerLayer(&pkt);
         ++next_seq;
     }
+    //    Sender_StartTimer(TIMEOUT);
 }
 
 /* event handler, called when a message is passed from the upper layer at the
    sender */
 void Sender_FromUpperLayer(struct message *msg) {
-    // 判断message_buffer是否还有余量
-    if (num_message >= MAX_BUFFER_SIZE) {
-        ASSERT(0);
-    }
 
-    // 将消息存入message_buffer，位置为next_message_index
-    int next_message_index = next_message_seq % MAX_BUFFER_SIZE;
-    if (message_buffer[next_message_index].size > 0) {
-        message_buffer[next_message_index].size = 0;
-        free(message_buffer[next_message_index].data);
+    // 将消息存入message_buffer，位置为idx
+    int idx = next_num % MAX_BUFFER_SIZE;
+    if (message_buffer[idx].size > 0) {
+        message_buffer[idx].size = 0;
+        free(message_buffer[idx].data);
     }
     // 因为msg拆分后的第一个数据包的payload中包含了msg.size的信息，所以比msg原本的size大了4个byte
-    message_buffer[next_message_index].size = msg->size + 4;
-    message_buffer[next_message_index].data = (char *)malloc(message_buffer[next_message_index].size);
-    memcpy(message_buffer[next_message_index].data, &(msg->size), 4); // 先将msg->size保存到data中
-    memcpy(message_buffer[next_message_index].data + 4, msg->data, msg->size);
-    ++next_message_seq;
+    message_buffer[idx].size = msg->size + 4;
+    message_buffer[idx].data = (char *)malloc(message_buffer[idx].size);
+    memcpy(message_buffer[idx].data, &(msg->size), 4); // 先将msg->size保存到data中
+    memcpy(message_buffer[idx].data + 4, msg->data, msg->size);
+    ++next_num;
     ++num_message;
 
     // 若计时器仍在计时，则不用操作，新到的message老老实实待在buffer里
@@ -199,7 +189,7 @@ void Sender_FromUpperLayer(struct message *msg) {
     // 计时器没有工作，则开始新一轮发包
     Sender_StartTimer(TIMEOUT);
     Chunk_Message();
-    Send_Packet();
+    send_packet();
 }
 
 /* event handler, called when a packet is passed from the lower layer at the
@@ -221,7 +211,7 @@ void Sender_FromLowerLayer(struct packet *pkt) {
         // 开始新一轮发包
         Sender_StartTimer(TIMEOUT); // 若上一轮计时没有结束，则该命令重置计时器
         Chunk_Message();
-        Send_Packet();
+        send_packet();
     }
     // 若window中所有的包都已确认被receiver接收，则结束计时器
     if (ack_seq == mx_seq - 1) {
@@ -235,5 +225,5 @@ void Sender_Timeout() {
     next_seq = mx_ack;
     Sender_StartTimer(TIMEOUT);
     Chunk_Message();
-    Send_Packet();
+    send_packet();
 }
