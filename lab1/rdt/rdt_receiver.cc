@@ -97,6 +97,7 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
     memcpy(&checksum, pkt->data, sizeof(short));
     memcpy(&msg->size, pkt->data + 2, 1);
     if (checksum != calc_Checksum(pkt) || msg->size < 0 || msg->size > RDT_PKTSIZE - header_size) {
+        std::cout<<"packet corrupted"<<std::endl;
         return;
     }
 
@@ -104,7 +105,12 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
     memcpy(&seq, pkt->data + 3, sizeof(int));
 
     std::cout << "receive packet, seq=" << seq << " ack=" << ack << " size=" << msg->size << std::endl;
-    if (seq >= ack + WINDOW_SIZE || seq < ack) return; //超出当前滑动窗口，因此不接收
+    if (seq >= ack + WINDOW_SIZE) return; //超出当前滑动窗口，因此不接收
+
+    if(seq<ack) {           //此时说明ack发生了丢包，需要重传ack包
+        send_ack(ack-1);
+    }
+
     msg->data = (char *) malloc(msg->size);
     std::cout << "checkpoint 1" << std::endl;
     memcpy(msg->data, pkt->data + header_size, msg->size);
@@ -143,6 +149,6 @@ void Receiver_FromLowerLayer(struct packet *pkt) {
 //    Receiver_ToUpperLayer(msg);
 
     /* don't forget to free the space */
-    if (msg->data != NULL) free(msg->data);
-    if (msg != NULL) free(msg);
+//    if (msg->data != NULL) free(msg->data);
+//    if (msg != NULL) free(msg);
 }

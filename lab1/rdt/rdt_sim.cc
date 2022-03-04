@@ -166,7 +166,7 @@ double corrupt_rate;
    a tracing level of 1 turns on regular traces,
    a tracing level of 2 prints out the delivered message
 */
-int tracing_level;
+int tracing_level = 2;
 
 /* simulation event chain core */
 EventChain sim_core;
@@ -342,8 +342,6 @@ void Receiver_ToUpperLayer(struct message *msg)
         printf("message is wrong, %c %c\n",msg->data[i],'0'+cnt);
         p=false;
 	}
-    if(!p)
-        std::cout<<msg->data[0]<<msg->data[1]<<std::endl;
 	cnt = (cnt+1) % 10;
 
 	if (tracing_level>=2)

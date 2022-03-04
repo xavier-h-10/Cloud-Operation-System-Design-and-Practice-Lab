@@ -37,7 +37,7 @@ std::queue<packet *> buffer;
 void Sender_Init() {
     fprintf(stdout, "At %.2fs: sender initializing ...\n", GetSimulationTime());
     mx_seq = 0;
-    mx_ack = 0;
+    mx_ack = -1;
     window.clear();
     while (!buffer.empty()) buffer.pop();
 }
@@ -68,26 +68,12 @@ void send_packet(struct packet *pkt) {
         window.push_back(pkt);
         Sender_ToLowerLayer(pkt);
 
-        int tmp = 0;
-        memcpy(&tmp, pkt->data + 3, sizeof(int));
-        std::cout << "packet sent, add to window, seq=" << tmp << " size=" << window.size() << " " << pkt << std::endl;
+        //   memcpy(&tmp, pkt->data + 3, sizeof(int));
+        //       std::cout << "packet sent, add to window, seq=" << tmp << " size=" << window.size() << " " << pkt << std::endl;
 //        memcpy(&tmp, window[window.size() - 1]->data + 3, sizeof(int));
 
 //        std::cout << tmp << std::endl;
     } else {
-//        bool is_send = true;
-//        for (int i = 0; i < WINDOW_SIZE; i++) {
-//            int seq;
-//            memcpy(&seq, window[i] + 3, sizeof(int));
-//            if (seq > mx_ack) {
-//                is_send = false;
-//            }
-//        }
-//        buffer.push(pkt);
-//        if (is_send) {
-//            window.clear();
-//            int size=std
-//        }
         buffer.push(pkt);
     }
     Sender_StartTimer(TIMEOUT);
@@ -100,11 +86,7 @@ void Sender_FromUpperLayer(struct message *msg) {
     int header_size = 7;
 
     /* maximum payload size */
-    int maxpayload_size = RDT_PKTSIZE - header_size;
-
-    /* split the message if it is too big */
-
-    /* reuse the same packet data structure */
+    char maxpayload_size = (char) (RDT_PKTSIZE - header_size);
 
     /* the cursor always points to the first unsent byte in the message */
     int cursor = 0;
@@ -114,12 +96,14 @@ void Sender_FromUpperLayer(struct message *msg) {
 //        pkt->data[2] = maxpayload_size;  //payload size
         packet *pkt = new packet;
         memcpy(pkt->data + 2, &maxpayload_size, 1);
-        memcpy(pkt->data + 3, &(mx_seq), sizeof(int));
+        memcpy(pkt->data + 3, &mx_seq, sizeof(int));
         memcpy(pkt->data + header_size, msg->data + cursor, maxpayload_size);
         unsigned short checksum = calc_checksum(pkt);
         memcpy(pkt->data, &checksum, sizeof(short));
 
-        std::cout << "send packet, seq=" << mx_seq << std::endl;
+        char pp[128];
+        memcpy(pp, pkt->data + header_size, maxpayload_size);
+        std::cout << "send packet, seq=" << mx_seq << " " << pp << std::endl;
         send_packet(pkt);
         mx_seq++;
 
@@ -131,14 +115,17 @@ void Sender_FromUpperLayer(struct message *msg) {
     if (msg->size > cursor) {
         /* fill in the packet */
         packet *pkt = new packet;
-        int tmp = msg->size - cursor;
+        char tmp = char(msg->size - cursor);
         memcpy(pkt->data + 2, &tmp, 1);
-        memcpy(pkt->data + 3, &(mx_seq), sizeof(int));
+        memcpy(pkt->data + 3, &mx_seq, sizeof(int));
         memcpy(pkt->data + header_size, msg->data + cursor, tmp);
         unsigned short checksum = calc_checksum(pkt);
         memcpy(pkt->data, &checksum, sizeof(short));
 
-        std::cout << "send last packet, seq=" << mx_seq << std::endl;
+        char pp[128];
+        memcpy(pp, pkt->data + header_size, tmp);
+
+        std::cout << "send last packet, seq=" << mx_seq << " " << pp << std::endl;
         send_packet(pkt);
         mx_seq++;
     }
@@ -196,6 +183,18 @@ void Sender_Timeout() {
         }
     }
     if (start_timer) {
+        Sender_StartTimer(TIMEOUT);
+    } else {
+        if (buffer.empty()) return;
+        for (int i = 0; i < WINDOW_SIZE; i++) {
+            delete window[i];
+        }
+        window.clear();
+        int size = std::min((int) buffer.size(), WINDOW_SIZE);
+        for (int i = 0; i < size; i++) {
+            Sender_ToLowerLayer(buffer.front());
+            buffer.pop();
+        }
         Sender_StartTimer(TIMEOUT);
     }
 }
