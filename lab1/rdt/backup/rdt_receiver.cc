@@ -11,6 +11,7 @@
  *       (excluding this single-byte header)
  */
 
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -21,37 +22,21 @@
 
 #define WINDOW_SIZE 10
 
-static packet *packet_buffer;
+message *message_buffer[WINDOW_SIZE];
+int message_seq[WINDOW_SIZE];   //对应的buffer seq number
 
-bool valid[WINDOW_SIZE];
+int ack;
 
-static message *msg;
-static int cursor;
-
-static int ack;
-
-const int header_size = 7; //checksum + size + seq
-
-static short calc_checksum(struct packet *pkt) {
-    long sum = 0;
-    for (int i = 2; i < RDT_PKTSIZE; i += 2) {
-        sum += *(unsigned short *) (&(pkt->data[i]));
-    }
-    while (sum >> 16) {
-        sum = (sum & 0xffff) + (sum >> 16);
-    }
-    return ~sum;
-}
+int total_size;
 
 /* receiver initialization, called once at the very beginning */
 void Receiver_Init() {
     fprintf(stdout, "At %.2fs: receiver initializing ...\n", GetSimulationTime());
 
-    msg = (message *) malloc(sizeof(message));
-    packet_buffer = (packet *) malloc(WINDOW_SIZE * sizeof(packet));
-    memset(valid,0,sizeof(valid));
+    for (int i = 0; i < WINDOW_SIZE; i++) {
+        message_seq[i] = -1;
+    }
     ack = 0;
-    cursor = 0;
 }
 
 /* receiver finalization, called once at the very end.
@@ -62,73 +47,72 @@ void Receiver_Final() {
     fprintf(stdout, "At %.2fs: receiver finalizing ...\n", GetSimulationTime());
 }
 
+unsigned short calc_checksum(struct packet *pkt) {
+    long sum = 0;
+    for (int i = 2; i < RDT_PKTSIZE; i += 2) {
+        sum += *(unsigned short *) (&(pkt->data[i]));
+    }
+    while (sum >> 16) {
+        sum = (sum & 0xffff) + (sum >> 16);
+    }
+    return ~sum;
+}
+
 void send_ack(int ack) {
-    packet pkt;          // ack包只包含checksum和ack即可
-    memcpy(pkt.data + 2, &ack, 4);
-    short checksum = calc_checksum(&pkt);
-    memcpy(pkt.data, &checksum, 2);
-    Receiver_ToLowerLayer(&pkt);
+    packet *pkt = new packet;         // ack包只包含checksum和ack即可
+    memcpy(pkt->data + 2, &ack, 4);
+
+    unsigned short checksum = calc_checksum(pkt);
+    memcpy(pkt->data, &checksum, 2);
+    Receiver_ToLowerLayer(pkt);
 }
 
 
 /* event handler, called when a packet is passed from the lower layer at the
    receiver */
 void Receiver_FromLowerLayer(struct packet *pkt) {
+    int header_size = 7;  //checksum + payload_size + seq
+
+    /* construct a message and deliver to the upper layer */
+    message *msg = new message;
+    memcpy(&msg->size, pkt->data + 2, 1);
+
     //检查checksum,若checksum不正确则丢包
-    short checksum;
+    unsigned short checksum;
     memcpy(&checksum, pkt->data, 2);
-    if (checksum != calc_checksum(pkt)) { // 校验失败
+    if (checksum != calc_checksum(pkt) || msg->size <= 0 || msg->size > RDT_PKTSIZE - header_size) {
         return;
     }
 
     int seq;
-    memcpy(&seq, pkt->data + 2, 4);
-    if (ack < seq && seq < ack + WINDOW_SIZE) {   //滑动窗口范围内
-        int idx = seq % WINDOW_SIZE;
-        if (!valid[idx]) {
-            memcpy(packet_buffer[idx].data, pkt->data, RDT_PKTSIZE);
-            valid[idx] = true;
-        }
-        send_ack(ack - 1);
-        return;
-    } else if (seq != ack) {
+    memcpy(&seq, pkt->data + 3, 4);
+
+    if (seq >= ack + WINDOW_SIZE) return; //超出当前滑动窗口，因此不接收
+
+    if (seq < ack) {           //此时说明ack包发生了丢包，需要重传ack包
         send_ack(ack - 1);
     }
 
-    if (seq == ack) { //seq=ack, 考虑buffer中的包
-        int size;
+    msg->data = new char[msg->size];
+    memcpy(msg->data, pkt->data + header_size, msg->size);
+
+    message_buffer[seq % WINDOW_SIZE] = msg;
+    message_seq[seq % WINDOW_SIZE] = seq;
+
+    if (seq == ack) {
+        Receiver_ToUpperLayer(msg);
+        total_size += strlen(msg->data);
+        std::cout << "receiver size=" << total_size << std::endl;
+
         while (true) {
             ack++;
-            size = (int) pkt->data[header_size - 1];
-
-            if (cursor == 0) {  //第一个包有message size, +4
-                size -= 4;
-//                std::cout<<"checkpoint 1";
-                memcpy(&msg->size, pkt->data + header_size, 4);
-                msg->data = (char *) malloc(msg->size);
-//                std::cout<<"checkpoint 2";
-                memcpy(msg->data + cursor, pkt->data + header_size + 4, size);
-                cursor += size;
-            } else {
-                memcpy(msg->data + cursor, pkt->data + header_size, size);
-                cursor += size;
-            }
-
-            if (cursor == msg->size) {      //整个message组装好发送
-                Receiver_ToUpperLayer(msg);
-                cursor = 0;
-            }
-
-            int idx = ack % WINDOW_SIZE;
-            if (valid[idx] == 1) {
-//                std::cout<<"valid=1, idx="<<idx<<std::endl;
-                pkt = &packet_buffer[idx];
-                memcpy(&seq, pkt->data + 2, 4);
-                valid[idx] = 0;
-            } else {
-                send_ack(seq);
-                break;
-            }
+            message *tmp = message_buffer[ack % WINDOW_SIZE];
+            seq = message_seq[ack % WINDOW_SIZE];
+            if (tmp == nullptr || seq != ack) break;
+            total_size += strlen(tmp->data);
+            std::cout << "receiver size=" << total_size << std::endl;
+            Receiver_ToUpperLayer(tmp);
         }
+        send_ack(ack - 1);
     }
 }
