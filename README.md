@@ -15,5 +15,9 @@ Lab for SE3356 Cloud Operating System Design and Practice, 2021 Spring.
 <td>Lab 3</td>
 <td>QoS Implementation with OvS</td>
 </tr>
+<tr>
+<td>Lab 4</td>
+<td>Kubernetes实践</td>
+</tr>
 </table>
 
