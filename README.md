@@ -1,4 +1,4 @@
-# # SE3356-Lab
+# Cloud Operation System Design and Practice Lab
 
 Lab for SE3356 Cloud Operating System Design and Practice, 2021 Spring.
 
