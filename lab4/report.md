@@ -278,6 +278,7 @@ spec:
     image: dplsming/nginx-fileserver:1.0
     ports:
       - containerPort: 80
+      	hostPort: 8080
     volumeMounts:
       - name: shared-data
         mountPath: /usr/share/nginx/html/files
@@ -286,7 +287,9 @@ spec:
     image: dplsming/aria2ng-downloader:1.0
     ports:
       - containerPort: 6800
+      	hostPort: 6800
       - containerPort: 6880
+      	hostPort: 6880
     volumeMounts:
       - name: shared-data
         mountPath: /data
@@ -314,41 +317,49 @@ spec:
 
 - 首先我们进入nginx-fileserver，查看host/container veth pair关系。由于该容器不能运行ip指令，首先使用`apt-get update & apt-get install -y iproute2`安装包。
 
-- 执行`ip link show eth0`指令，可以看到12是对应的index。
-
-  ```shell
-  root@two-containers:/# ip link show eth0
-  11: eth0@if12: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue state UP mode DEFAULT group default 
-      link/ether 5e:a7:b8:c1:07:c9 brd ff:ff:ff:ff:ff:ff link-netnsid 0
-  ```
-
-- 接着退出到host，执行`ip link show | grep 12`，可得到对应12的veth interface。
-
-  ```shell
-  root@class:~# ip link show | grep 12
-  12: vethwepl3a19ab6@if11: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue master weave state UP mode DEFAULT group default 
-  ```
-
-- 对于aria2ng-downloader，我们采用上述同样的方法。可发现两个容器对应相同的veth interface。
-
-- 我们使用`kubectl describe pod two-containers`，查看cluster ip。可得知cluster ip为`10.44.0.1`。
+- 执行`ip link show eth0`指令，可以看到35是对应的index。
 
   ```bash
-  root@class:~# kubectl describe pod two-containers
-  Name:         two-containers
-  Namespace:    default
-  Priority:     0
-  Node:         class2/192.168.1.8
-  Start Time:   Sun, 24 Apr 2022 19:45:28 +0800
-  Labels:       <none>
-  Annotations:  <none>
-  Status:       Running
-  IP:           10.44.0.1
-  IPs:
-    IP:  10.44.0.1
+  35: eth0@if36: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue state UP mode DEFAULT group default
+      link/ether 36:ef:06:ad:c8:28 brd ff:ff:ff:ff:ff:ff link-netnsid 0
+  ```
+  
+- 接着退出到host，在host下执行指令，查看对应的veth interface。
+
+  ```
+  36: vethwepl551c56d@if35: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue master weave state UP mode DEFAULT group default
   ```
 
-  
+- 我们在host下使用`ip_addr`，结果如下所示：
+
+  ```bash
+  1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+      link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
+  2: ens3: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1450 qdisc fq_codel state UP mode DEFAULT group default qlen 1000
+      link/ether fa:16:3e:5e:52:bc brd ff:ff:ff:ff:ff:ff
+  3: docker0: <NO-CARRIER,BROADCAST,MULTICAST,UP> mtu 1500 qdisc noqueue state DOWN mode DEFAULT group default
+      link/ether 02:42:aa:b2:09:97 brd ff:ff:ff:ff:ff:ff
+  4: datapath: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000
+      link/ether 2a:f4:1f:36:ec:23 brd ff:ff:ff:ff:ff:ff
+  6: weave: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue state UP mode DEFAULT group default qlen 1000
+      link/ether 32:ed:4f:90:26:3a brd ff:ff:ff:ff:ff:ff
+  8: vethwe-datapath@vethwe-bridge: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue master datapath state UP mode DEFAULT group default
+      link/ether 46:21:b7:98:18:58 brd ff:ff:ff:ff:ff:ff
+  9: vethwe-bridge@vethwe-datapath: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue master weave state UP mode DEFAULT group default
+      link/ether 46:e2:9c:88:34:12 brd ff:ff:ff:ff:ff:ff
+  10: vxlan-6784: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 65535 qdisc noqueue master datapath state UNKNOWN mode DEFAULT group default qlen 1000
+      link/ether b6:3d:fb:1c:fa:02 brd ff:ff:ff:ff:ff:ff
+  36: vethwepl551c56d@if35: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1376 qdisc noqueue master weave state UP mode DEFAULT group default
+      link/ether b2:5e:14:aa:af:6b brd ff:ff:ff:ff:ff:ff link-netnsid 0
+  ```
+
+- weave 网络包含两个虚拟交换机： weave 和 datapath， vethwe-bridge 和 vethwe-datapath 将二者连接在一起；weave 和 datapath 分工不同，weave 负责将容器接入 weave 网络，datapath 负责在主机间vxlan 隧道中并收发数据。
+
+- 因此，我们可以绘制下图。**其中红线代表从master节点使用cluster ip访问位于worker节点中的Pod的网络路径。**
+
+  <img src="/Users/xtommy/Desktop/SE3356-lab/lab4/graph.png" alt="graph" style="zoom:45%;" />
+
+
 
 **Q7**: 请采用声明式接口对Service进行部署，并将部署所需的yml文件记录在实践文档中。
 
@@ -412,9 +423,9 @@ spec:
 
 我们可以看到，对于Service的每个端口，都有一条`KUBE-SERVICES`规则、一个`KUBE-SVC-<HASH>`链。对于每个Pod末端，应该存在一条`KUBE-SVC-<HASH>`链和`KUBE-SEP-<HASH>`链与之对应。
 
-如果是非当前Node的访问，网络流量先进入`PREROUTING`，再进入`KUBE-SERVICES`，选择对应的`KUBE-SVC-<HASH>`链以及Pod对应的`KUBE-SEP-<HASH>`链。最后通过dnat，定向到真实Pod中的地址。
+**如果是非当前Node的访问，网络流量先进入`PREROUTING`，再进入`KUBE-SERVICES`，选择对应的`KUBE-SVC-<HASH>`链以及Pod对应的`KUBE-SEP-<HASH>`链。最后通过dnat，定向到真实Pod中的地址。**
 
-如果是当前Node的访问，网络流量先进入`OUTPUT`，再进入`KUB-SERVICES`，之后过程与上述相同。
+**如果是当前Node的访问，网络流量先进入`OUTPUT`，再进入`KUB-SERVICES`，之后过程与上述相同。**
 
 
 
@@ -429,6 +440,10 @@ spec:
 - iptables并不是并不是真正的防火墙，而是一个客户端工具。 用户通过iptables去操作真正的防火墙 netfilter。 netfilter位于内核态。 netfilter/iptables 组合提供<u>封包过滤、封包重定向和NAT</u>等功能。
 
   在iptables模式下，kube-proxy会将规则附加到“NAT pre-routing” hook上，**以实现NAT和负载均衡的功能**。
+  
+  
+
+<img src="./proxy.svg" alt="proxy" width="430px" />
 
 
 
@@ -500,7 +515,7 @@ two-containers-deployment   3/3     3            3           83s
 
 **Q12**: 在该使用Deployment的部署方式下，不同Pod之间的文件是否共享？该情况会在实际使用文件下载与共享服务时产生怎样的实际效果与问题？应如何解决这一问题？
 
-答：不同Pod之间的文件不共享。这会导致实际使用文件下载与共享时，例如一个Pod上共享了一个文件，但在另外的Pod上看不到。我们可以采用**持久卷（Presistent Volume）**来解决这个问题。对于Deployment而言，可以在配置中申领一块PVC，PVC申领会耗用PV资源，每个Pod共享一块PV，因此解决了这一问题。
+答：由于我们没有指定hostPath，因此不同Pod之间的文件不共享。这会导致实际使用文件下载与共享时，例如一个Pod上共享了一个文件，但在另外的Pod上看不到。我们可以采用**持久卷（Presistent Volume）**来解决这个问题。我们首先创建PV，PVC。对于Deployment而言，可以在配置中申领一块PVC，PVC申领会耗用PV资源，每个Pod共享一块PV，因此解决了这一问题。
 
 ​		对于PV，我们可以采用挂载到本地目录，或者使用NFS均可。
 
